@@ -11,7 +11,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import Response
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import RedirectResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import RedirectResponse, JSONResponse, PlainTextResponse, HTMLResponse
 
 from db import init_schema, insert_click, link_click_to_tg_user, get_clicks_rows_for_csv
 
@@ -191,6 +191,106 @@ async def admin_csv(token: str, limit: int = 5000) -> PlainTextResponse:
     for r in rows:
         w.writerow(r)
     return PlainTextResponse(buf.getvalue(), media_type="text/csv")
+
+
+@app.get("/admin/json")
+async def admin_json(token: str, limit: int = 500) -> JSONResponse:
+    _check_admin(token)
+    rows = get_clicks_rows_for_csv(TRACK_DB, limit=limit)
+    # чтобы свежее было сверху (если db уже так отдаёт — не страшно)
+    rows = sorted(rows, key=lambda r: int(r.get("ts") or 0), reverse=True)
+    return JSONResponse({"ok": True, "rows": rows})
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(token: str) -> HTMLResponse:
+    _check_admin(token)
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>IG → TG отчёт</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, Arial; margin: 16px; }}
+    .row {{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }}
+    button {{ padding:10px 14px; border-radius:10px; border:1px solid #ddd; background:#fff; }}
+    small {{ color:#666; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 12px; }}
+    th, td {{ border: 1px solid #ddd; padding: 8px; font-size: 13px; vertical-align: top; }}
+    th {{ background: #f6f6f6; text-align: left; }}
+    .linked {{ font-weight: 600; }}
+    code {{ background:#f6f6f6; padding:2px 6px; border-radius:6px; }}
+  </style>
+</head>
+<body>
+  <div class="row">
+    <h3 style="margin:0;">Переходы по ссылке</h3>
+    <button onclick="loadNow()">Обновить</button>
+    <small id="status"></small>
+  </div>
+
+  <small>Автообновление каждые 20 секунд. “linked_ts” появляется, когда человек нажал Start у бота.</small>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Время</th>
+        <th>Telegram</th>
+        <th>Источник</th>
+        <th>IP</th>
+        <th>UA</th>
+        <th>linked_ts</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+<script>
+const token = "{token}";
+function fmtTs(ts) {{
+  if(!ts) return "";
+  const d = new Date(Number(ts)*1000);
+  return d.toLocaleString();
+}}
+
+async function loadNow() {{
+  const st = document.getElementById("status");
+  st.textContent = "обновляю…";
+  try {{
+    const r = await fetch(`/admin/json?token=${{encodeURIComponent(token)}}&limit=500`, {{ cache: "no-store" }});
+    const j = await r.json();
+    if(!j.ok) {{ st.textContent = "ошибка доступа"; return; }}
+    const tb = document.getElementById("tbody");
+    tb.innerHTML = "";
+    for (const row of j.rows) {{
+      const tg = row.tg_username ? ("@" + row.tg_username) : "";
+      const name = [row.tg_first_name, row.tg_last_name].filter(Boolean).join(" ").trim();
+      const who = [tg, name, row.tg_user_id ? ("(" + row.tg_user_id + ")") : ""].filter(Boolean).join(" ");
+      const tr = document.createElement("tr");
+      if (row.linked_ts) tr.className = "linked";
+      tr.innerHTML = `
+        <td>${{fmtTs(row.ts)}}</td>
+        <td>${{who || ""}}</td>
+        <td><div>${{row.referrer || ""}}</div><div><code>${{row.token || ""}}</code></div></td>
+        <td>${{row.ip || ""}}</td>
+        <td>${{(row.user_agent || "").slice(0, 60)}}</td>
+        <td>${{fmtTs(row.linked_ts)}}</td>
+      `;
+      tb.appendChild(tr);
+    }}
+    st.textContent = "ok: " + new Date().toLocaleTimeString();
+  }} catch(e) {{
+    st.textContent = "ошибка загрузки";
+  }}
+}}
+
+loadNow();
+setInterval(loadNow, 20000);
+</script>
+</body></html>"""
+    return HTMLResponse(html)
+
 
 
 @app.get("/admin/set_webhook")
