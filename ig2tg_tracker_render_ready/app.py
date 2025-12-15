@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any
 
 import httpx
 from dotenv import load_dotenv
+from fastapi import Response
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse, PlainTextResponse
 
@@ -70,9 +71,9 @@ async def tg_send_message(chat_id: int, text: str, reply_markup: Optional[Dict[s
     await tg_api("sendMessage", payload)
 
 
-@app.get("/health")
-async def health() -> JSONResponse:
-    return JSONResponse({"ok": True})
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health():
+    return {"ok": True}
 
 
 @app.get("/privacy")
